@@ -21,7 +21,8 @@ import type {Address} from '@src/types/onyx/PrivatePersonalDetails';
 
 import type {OnyxEntry} from 'react-native-onyx';
 
-import React, {useEffect, useRef, useState} from 'react';
+import {useIsFocused} from '@react-navigation/native';
+import React, {useEffect, useState} from 'react';
 import {View} from 'react-native';
 
 type AddressPageProps = {
@@ -45,64 +46,74 @@ function AddressPage({title, address, updateAddress, isLoadingApp = true, backTo
     const styles = useThemeStyles();
     const {translate} = useLocalize();
     const {state: stateFromUrl, country: countryFromUrl} = useGeographicalStateAndCountryFromRoute();
+    const isFocused = useIsFocused();
 
     // Check if country is valid
     const {street} = address ?? {};
     const [street1, legacyStreet2] = street ? street.split('\n') : [undefined, undefined];
     // nullish coalescing cannot be used if explicit line 2 can be an empty string
     const street2 = address?.street2 || legacyStreet2;
-    const [currentCountry, setCurrentCountry] = useState(address?.country ?? defaultCountry);
-    // State URL parameters are US state codes, including when navigation reuses an already open address page.
-    const country = stateFromUrl ? CONST.COUNTRY.US : currentCountry;
-    const [state, setState] = useState(stateFromUrl ?? address?.state);
-    const [city, setCity] = useState(address?.city);
-    const [zipcode, setZipcode] = useState(address?.zip);
-    // The selectors consume URL parameters, but their values and subsequent edits must survive saved data arriving later.
-    const hasEditedAddress = useRef(!!(stateFromUrl || countryFromUrl));
+    const [selectedCountry, setSelectedCountry] = useState<Country | ''>();
+    const [selectedState, setSelectedState] = useState<string>();
+    const [selectedCity, setSelectedCity] = useState<string>();
+    const [selectedZipcode, setSelectedZipcode] = useState<string>();
+    const [countryForStateParameter, setCountryForStateParameter] = useState(stateFromUrl ? countryFromUrl : undefined);
+
+    // The country selector can consume its parameter before the state parameter is cleared.
+    if (stateFromUrl && countryFromUrl && countryFromUrl !== countryForStateParameter) {
+        setCountryForStateParameter(countryFromUrl);
+    } else if (!stateFromUrl && countryForStateParameter) {
+        setCountryForStateParameter(undefined);
+    }
+
+    const savedCountry = address?.country ?? defaultCountry;
+    const currentCountry = selectedCountry ?? savedCountry;
+    // State URL parameters are US codes, but an explicit country takes precedence over an incompatible state.
+    const country = countryFromUrl ?? (stateFromUrl ? (countryForStateParameter ?? CONST.COUNTRY.US) : currentCountry);
+    const shouldUseSavedFields = country === savedCountry;
+    const state = country === CONST.COUNTRY.US && stateFromUrl ? stateFromUrl : (selectedState ?? (shouldUseSavedFields ? address?.state : ''));
+    const city = selectedCity ?? (shouldUseSavedFields ? address?.city : '');
+    const zipcode = selectedZipcode ?? (shouldUseSavedFields ? address?.zip : '');
 
     useEffect(() => {
-        if (!address || hasEditedAddress.current) {
+        if (!isFocused || !stateFromUrl || !countryForStateParameter || countryForStateParameter === CONST.COUNTRY.US) {
             return;
         }
-        setState(address.state);
-        setCurrentCountry(address.country);
-        setCity(address.city);
-        setZipcode(address.zip);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [address?.state, address?.country, address?.city, address?.zip]);
+        // The US selector is absent for this country, so it cannot consume the inapplicable state parameter.
+        Navigation.setParams({state: undefined});
+    }, [stateFromUrl, countryForStateParameter, isFocused]);
 
-    const handleAddressChange = (value: unknown, key: unknown) => {
+    const updateAddressFields = (value: unknown, key: unknown) => {
         const addressPart = value as string;
         const addressPartKey = key as keyof Address;
 
         if (addressPartKey !== INPUT_IDS.COUNTRY && addressPartKey !== INPUT_IDS.STATE && addressPartKey !== INPUT_IDS.CITY && addressPartKey !== INPUT_IDS.ZIP_POST_CODE) {
             return;
         }
-        hasEditedAddress.current = true;
         if (addressPartKey === INPUT_IDS.COUNTRY) {
-            if (addressPart !== currentCountry) {
-                setCurrentCountry(getCountryCode(addressPart) ?? '');
-                setState('');
-                setCity('');
-                setZipcode('');
+            const nextCountry = getCountryCode(addressPart) ?? '';
+            setSelectedCountry(nextCountry);
+            if (nextCountry !== currentCountry) {
+                setSelectedState('');
+                setSelectedCity('');
+                setSelectedZipcode('');
             }
             return;
         }
         if (addressPartKey === INPUT_IDS.STATE) {
-            if (stateFromUrl) {
-                setCurrentCountry(CONST.COUNTRY.US);
-            }
-            setState(addressPart);
-            setCity('');
-            setZipcode('');
+            // Autocomplete can select country and state in one batch; retain the country its earlier callback selected.
+            setSelectedCountry((previousCountry) => (stateFromUrl ? CONST.COUNTRY.US : (previousCountry ?? currentCountry)));
+            setSelectedState(addressPart);
+            setSelectedCity('');
+            setSelectedZipcode('');
             return;
         }
         if (addressPartKey === INPUT_IDS.CITY) {
-            setCity(addressPart);
-            setZipcode('');
+            setSelectedCity(addressPart);
+            setSelectedZipcode('');
             return;
         }
-        setZipcode(addressPart);
+        setSelectedZipcode(addressPart);
     };
 
     return (
@@ -127,7 +138,7 @@ function AddressPage({title, address, updateAddress, isLoadingApp = true, backTo
                         submitButtonText={translate('common.save')}
                         city={city}
                         country={country}
-                        onAddressChanged={handleAddressChange}
+                        onAddressChanged={updateAddressFields}
                         state={state}
                         street1={street1}
                         street2={street2}

@@ -33,16 +33,21 @@ jest.mock('@rnmapbox/maps', () => {
 
 const Stack = createPlatformStackNavigator<SettingsNavigatorParamList>();
 
-const renderPage = (initialRouteName: typeof SCREENS.SETTINGS.PROFILE.ADDRESS, initialParams?: SettingsNavigatorParamList[typeof SCREENS.SETTINGS.PROFILE.ADDRESS]) => {
+type AddressRouteParams = {state?: string; country?: string};
+
+const renderPage = (initialRouteName: typeof SCREENS.SETTINGS.PROFILE.ADDRESS, initialParams?: AddressRouteParams) => {
+    // Initial state models raw URL values, including values the typed screen API rejects.
     return render(
         <ComposeProviders components={[OnyxListItemProvider, LocaleContextProvider, CurrentReportIDContextProvider]}>
             <PortalProvider>
-                <NavigationContainer ref={navigationRef}>
+                <NavigationContainer
+                    ref={navigationRef}
+                    initialState={{index: 0, routes: [{name: initialRouteName, params: initialParams}]}}
+                >
                     <Stack.Navigator initialRouteName={initialRouteName}>
                         <Stack.Screen
                             name={SCREENS.SETTINGS.PROFILE.ADDRESS}
                             component={PersonalAddressPage}
-                            initialParams={initialParams}
                         />
                     </Stack.Navigator>
                 </NavigationContainer>
@@ -167,6 +172,50 @@ describe('AddressPageTest', () => {
         expect(screen.getByText('Canada')).toBeOnTheScreen();
         expect(screen.getByLabelText('State / Province')).toHaveProp('value', '');
         expect(screen.queryByText('Missouri')).not.toBeOnTheScreen();
+    });
+
+    it.each([false, true])('should respect an explicit non-US country when app loading is initially %s', async (isLoadingApp) => {
+        // Given a link whose explicit country makes the US state code inapplicable
+        await TestHelper.signInWithTestUser();
+        await act(async () => {
+            await Onyx.set(ONYXKEYS.PRIVATE_PERSONAL_DETAILS, {addresses: [{country: 'US', state: 'CA', street: '123 Test St'}]});
+            await Onyx.set(ONYXKEYS.IS_LOADING_APP, isLoadingApp);
+        });
+        await waitForBatchedUpdatesWithAct();
+
+        // When the country and state parameters arrive together, including before the form mounts
+        renderPage(SCREENS.SETTINGS.PROFILE.ADDRESS, {country: 'CA', state: 'MO'});
+        await waitForBatchedUpdatesWithAct();
+        await act(async () => Onyx.set(ONYXKEYS.IS_LOADING_APP, false));
+        await waitForBatchedUpdatesWithAct();
+
+        // Then the state parameter must not replace the explicit country or retain the old US state
+        expect(screen.getByText('Canada')).toBeOnTheScreen();
+        expect(screen.getByLabelText('State / Province')).toHaveProp('value', '');
+        expect(screen.queryByText('Missouri')).not.toBeOnTheScreen();
+    });
+
+    it('should load a matching saved state after a country-only URL has been consumed', async () => {
+        // Given a country link matching the default country before the saved address is available
+        await TestHelper.signInWithTestUser();
+        await act(async () => {
+            await Onyx.set(ONYXKEYS.PRIVATE_PERSONAL_DETAILS, {addresses: []});
+            await Onyx.set(ONYXKEYS.COUNTRY, 'US');
+            await Onyx.set(ONYXKEYS.IS_LOADING_APP, false);
+        });
+        await waitForBatchedUpdatesWithAct();
+        renderPage(SCREENS.SETTINGS.PROFILE.ADDRESS, {country: 'US'});
+        await waitForBatchedUpdatesWithAct();
+
+        // When the matching saved address arrives, its untouched state must still initialize the form
+        await act(async () => {
+            await Onyx.set(ONYXKEYS.PRIVATE_PERSONAL_DETAILS, {addresses: [{country: 'US', state: 'CA', street: '123 Test St'}]});
+        });
+        await waitForBatchedUpdatesWithAct();
+
+        // Then consuming the country parameter does not discard the saved state
+        expect(screen.getByText('United States')).toBeOnTheScreen();
+        expect(screen.getByText('California')).toBeOnTheScreen();
     });
 
     it.each([undefined, {state: 'ASDF', country: 'XX'}])('should load the saved address when the route has no valid overrides: %s', async (initialParams) => {

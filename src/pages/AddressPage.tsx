@@ -4,6 +4,7 @@ import DelegateNoAccessWrapper from '@components/DelegateNoAccessWrapper';
 import HeaderWithBackButton from '@components/HeaderWithBackButton';
 import ScreenWrapper from '@components/ScreenWrapper';
 
+import useGeographicalStateAndCountryFromRoute from '@hooks/useGeographicalStateAndCountryFromRoute';
 import useLocalize from '@hooks/useLocalize';
 import useThemeStyles from '@hooks/useThemeStyles';
 
@@ -20,7 +21,7 @@ import type {Address} from '@src/types/onyx/PrivatePersonalDetails';
 
 import type {OnyxEntry} from 'react-native-onyx';
 
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {View} from 'react-native';
 
 type AddressPageProps = {
@@ -43,6 +44,7 @@ type AddressPageProps = {
 function AddressPage({title, address, updateAddress, isLoadingApp = true, backTo, defaultCountry, shouldRequireZip}: AddressPageProps) {
     const styles = useThemeStyles();
     const {translate} = useLocalize();
+    const {state: stateFromUrl, country: countryFromUrl} = useGeographicalStateAndCountryFromRoute();
 
     // Check if country is valid
     const {street} = address ?? {};
@@ -50,12 +52,16 @@ function AddressPage({title, address, updateAddress, isLoadingApp = true, backTo
     // nullish coalescing cannot be used if explicit line 2 can be an empty string
     const street2 = address?.street2 || legacyStreet2;
     const [currentCountry, setCurrentCountry] = useState(address?.country ?? defaultCountry);
-    const [state, setState] = useState(address?.state);
+    // State URL parameters are US state codes, including when navigation reuses an already open address page.
+    const country = stateFromUrl ? CONST.COUNTRY.US : currentCountry;
+    const [state, setState] = useState(stateFromUrl ?? address?.state);
     const [city, setCity] = useState(address?.city);
     const [zipcode, setZipcode] = useState(address?.zip);
+    // The selectors consume URL parameters, but their values and subsequent edits must survive saved data arriving later.
+    const hasEditedAddress = useRef(!!(stateFromUrl || countryFromUrl));
 
     useEffect(() => {
-        if (!address) {
+        if (!address || hasEditedAddress.current) {
             return;
         }
         setState(address.state);
@@ -72,14 +78,20 @@ function AddressPage({title, address, updateAddress, isLoadingApp = true, backTo
         if (addressPartKey !== INPUT_IDS.COUNTRY && addressPartKey !== INPUT_IDS.STATE && addressPartKey !== INPUT_IDS.CITY && addressPartKey !== INPUT_IDS.ZIP_POST_CODE) {
             return;
         }
-        if (addressPartKey === INPUT_IDS.COUNTRY && addressPart !== currentCountry) {
-            setCurrentCountry(getCountryCode(addressPart) ?? '');
-            setState('');
-            setCity('');
-            setZipcode('');
+        hasEditedAddress.current = true;
+        if (addressPartKey === INPUT_IDS.COUNTRY) {
+            if (addressPart !== currentCountry) {
+                setCurrentCountry(getCountryCode(addressPart) ?? '');
+                setState('');
+                setCity('');
+                setZipcode('');
+            }
             return;
         }
         if (addressPartKey === INPUT_IDS.STATE) {
+            if (stateFromUrl) {
+                setCurrentCountry(CONST.COUNTRY.US);
+            }
             setState(addressPart);
             setCity('');
             setZipcode('');
@@ -114,7 +126,7 @@ function AddressPage({title, address, updateAddress, isLoadingApp = true, backTo
                         onSubmit={updateAddress}
                         submitButtonText={translate('common.save')}
                         city={city}
-                        country={currentCountry}
+                        country={country}
                         onAddressChanged={handleAddressChange}
                         state={state}
                         street1={street1}
